@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>claude cockpit</title>
+<script src="/static/cytoscape.min.js"></script>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3;
+    --muted:#8b949e; --accent:#58a6ff; --green:#3fb950; --amber:#d29922;
+    --red:#f85149; --blue:#388bfd; --purple:#bc8cff;
+    --rowhover:#1c2230; --rowsel:#1f2940; --markbg:#3b2f00; --markfg:#f1d68a;
+  }
+  body.light {
+    --bg:#ffffff; --panel:#f6f8fa; --border:#d0d7de; --fg:#1f2328;
+    --muted:#656d76; --accent:#0969da; --green:#1a7f37; --amber:#9a6700;
+    --red:#cf222e; --blue:#0969da; --purple:#8250df;
+    --rowhover:#eef1f4; --rowsel:#ddf4ff; --markbg:#fff3c4; --markfg:#4d2d00;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:13px/1.5 -apple-system,SF Pro Text,Segoe UI,sans-serif;
+         background:var(--bg); color:var(--fg); height:100vh; overflow:hidden; }
+  #app { display:grid; grid-template-columns:420px 1fr; height:100vh; }
+  #left { border-right:1px solid var(--border); display:flex; flex-direction:column; min-height:0; }
+  header { padding:10px 14px; border-bottom:1px solid var(--border); display:flex;
+           align-items:center; gap:8px; }
+  header h1 { font-size:14px; margin:0; font-weight:600; letter-spacing:.3px; }
+  header .stat { color:var(--muted); font-size:11px; margin-left:auto; }
+  .searchbar { padding:10px 14px; border-bottom:1px solid var(--border); }
+  #q { width:100%; padding:8px 10px; background:var(--bg); border:1px solid var(--border);
+       border-radius:6px; color:var(--fg); font-size:13px; }
+  #q:focus { outline:none; border-color:var(--accent); }
+  .chips { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  .chip { font-size:11px; padding:3px 9px; border:1px solid var(--border); border-radius:20px;
+          color:var(--muted); cursor:pointer; user-select:none; }
+  .chip.on { background:var(--accent); border-color:var(--accent); color:#06121f; font-weight:600; }
+  #list { overflow-y:auto; flex:1; min-height:0; }
+  .row { padding:9px 14px; border-bottom:1px solid var(--border); cursor:pointer; }
+  .row:hover { background:var(--rowhover); }
+  .row.sel { background:var(--rowsel); }
+  .row .t { font-weight:600; color:var(--fg); }
+  .row .meta { color:var(--muted); font-size:11px; margin-top:2px; display:flex;
+               gap:6px; flex-wrap:wrap; align-items:center; }
+  .badge { font-size:10px; padding:1px 6px; border-radius:10px; border:1px solid var(--border); }
+  .b-pr { color:var(--blue); border-color:var(--blue); }
+  .b-dirty { color:var(--amber); border-color:var(--amber); }
+  .b-ws { color:var(--purple); border-color:var(--purple); }
+  .actions { display:none; gap:6px; margin-top:7px; flex-wrap:wrap; }
+  .row.sel .actions { display:flex; }
+  .actions button, .actions a { font-size:11px; padding:3px 8px; background:var(--bg);
+      border:1px solid var(--border); border-radius:5px; color:var(--accent);
+      cursor:pointer; text-decoration:none; }
+  .actions button:hover { border-color:var(--accent); }
+  #right { position:relative; min-width:0; }
+  #cy { width:100%; height:100%; }
+  #toolbar { position:absolute; top:10px; right:12px; z-index:5; display:flex; gap:6px; }
+  #toolbar button { font-size:11px; padding:4px 9px; background:var(--panel);
+      border:1px solid var(--border); border-radius:5px; color:var(--fg); cursor:pointer; }
+  #toolbar button:hover { border-color:var(--accent); }
+  #legend { position:absolute; bottom:10px; left:12px; z-index:5; background:var(--panel);
+      border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:11px;
+      color:var(--muted); opacity:.95; }
+  #legend span { display:inline-flex; align-items:center; gap:4px; margin-right:10px; }
+  #legend i { width:9px; height:9px; border-radius:50%; display:inline-block; }
+  #toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%);
+      background:var(--green); color:#06121f; padding:7px 14px; border-radius:6px;
+      font-weight:600; font-size:12px; opacity:0; transition:opacity .2s; pointer-events:none; }
+  #toast.show { opacity:1; }
+  .empty { padding:30px 14px; color:var(--muted); text-align:center; }
+  .snip { font-size:11px; color:var(--muted); margin-top:4px; padding-left:8px;
+          border-left:2px solid var(--border); line-height:1.45; }
+  .snip mark { background:var(--markbg); color:var(--markfg); border-radius:2px; padding:0 1px; }
+  .hits { color:var(--green); font-weight:600; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="left">
+    <header>
+      <h1>⬡ claude cockpit</h1>
+      <span class="stat" id="stat">loading…</span>
+    </header>
+    <div class="searchbar">
+      <input id="q" placeholder="поиск по имени сессии, ветке, промпту, ID…" autofocus>
+      <div class="chips">
+        <span class="chip on" data-f="all">все</span>
+        <span class="chip" data-f="pr">с PR</span>
+        <span class="chip" data-f="dirty">dirty dir</span>
+        <span class="chip" data-f="recent">7 дней</span>
+        <span class="chip" data-f="orphan">orphan</span>
+        <span class="chip" id="convoToggle" title="искать по всему тексту бесед">💬 в беседе</span>
+      </div>
+    </div>
+    <div id="list"></div>
+  </div>
+  <div id="right">
+    <div id="toolbar">
+      <button id="themeBtn" title="светлая/тёмная тема">🌙</button>
+      <button id="toggleSess">скрыть сессии</button>
+      <button id="relayout">раскладка</button>
+      <button id="refresh">⟳ скан</button>
+    </div>
+    <div id="cy"></div>
+    <div id="legend">
+      <span><i style="background:#3fb950"></i>чистая dir</span>
+      <span><i style="background:#d29922"></i>dirty dir</span>
+      <span><i style="background:#388bfd"></i>сессия с PR</span>
+      <span><i style="background:#8b949e"></i>сессия</span>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+let MODEL = null, SHOW_SESS = true, SEL = null, FILTER = "all", cy = null;
+let CONVO = false, CONVO_RESULTS = null, searchTimer = null;
+const $ = s => document.querySelector(s);
+
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 1300);
+}
+function copy(text, label) {
+  navigator.clipboard.writeText(text).then(() => toast((label||"скопировано")+" ✓"));
+}
+async function post(url, body) {
+  const r = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(body)});
+  return r.json();
+}
+
+async function load(refresh) {
+  $("#stat").textContent = refresh ? "сканирую…" : "loading…";
+  const r = await fetch("/api/model" + (refresh ? "?refresh=1" : ""));
+  MODEL = await r.json();
+  const d = MODEL.directories, s = MODEL.sessions;
+  _dirByPath = {};
+  d.forEach(x => { _dirByPath[x.path] = x; });
+  $("#stat").textContent = `${d.length} dir · ${s.length} сессий · `
+    + new Date(MODEL.generated*1000).toLocaleTimeString();
+  render(); buildGraph();
+}
+
+let _dirByPath = {};
+function dirOf(s) {
+  if (s.cwd && _dirByPath[s.cwd]) return _dirByPath[s.cwd];
+  return MODEL.directories.find(d => d.name === s.workspace);
+}
+
+function sessionMatches(s) {
+  const q = $("#q").value.trim().toLowerCase();
+  const hay = [s.title, s.branch, s.first_prompt, s.id, s.workspace]
+    .filter(Boolean).join(" ").toLowerCase();
+  if (q && !hay.includes(q)) return false;
+  const dir = dirOf(s);
+  if (FILTER === "pr" && !s.pr_number) return false;
+  if (FILTER === "dirty" && !(dir && dir.dirty > 0)) return false;
+  if (FILTER === "recent" && (Date.now()/1000 - s.mtime) > 7*86400) return false;
+  if (FILTER === "orphan" && dir) return false;
+  return true;
+}
+
+function snipHtml(snips, q) {
+  if (!snips || !snips.length) return "";
+  const re = new RegExp("("+q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+")","ig");
+  return snips.map(s => `<div class="snip">…${esc(s).replace(re,"<mark>$1</mark>")}…</div>`).join("");
+}
+
+function render() {
+  const list = $("#list");
+  const q = $("#q").value.trim();
+  const rows = CONVO ? (CONVO_RESULTS || [])
+                     : MODEL.sessions.filter(sessionMatches);
+  if (CONVO && CONVO_RESULTS === null) {
+    list.innerHTML = '<div class="empty">введи запрос — ищу по всему тексту бесед</div>'; return; }
+  if (!rows.length) { list.innerHTML = '<div class="empty">ничего не найдено</div>'; return; }
+  list.innerHTML = "";
+  for (const s of rows) {
+    const dir = dirOf(s);
+    const path = (dir && dir.path) || (s.cwd) || "";
+    const el = document.createElement("div");
+    el.className = "row" + (SEL === s.id ? " sel" : "");
+    el.dataset.id = s.id;
+    const title = s.title || (s.branch ? s.branch.replace(/^claude\//,"") : s.id.slice(0,8));
+    const age = timeago(s.mtime);
+    el.innerHTML = `
+      <div class="t">${esc(title)}</div>
+      <div class="meta">
+        <span class="badge b-ws">${esc(s.workspace)}</span>
+        ${s.pr_number ? `<span class="badge b-pr">PR #${s.pr_number}</span>`:""}
+        ${dir && dir.dirty>0 ? `<span class="badge b-dirty">${dir.dirty} dirty</span>`:""}
+        ${s.hits ? `<span class="hits">${s.hits}×</span>`:""}
+        <span>${age}</span>
+        <span>${s.messages} msg</span>
+      </div>
+      ${CONVO ? snipHtml(s.snippets, q) : ""}
+      <div class="actions">
+        <button data-a="cp-path">copy path</button>
+        <button data-a="cp-id">copy session ID</button>
+        <button data-a="cp-resume">copy resume cmd</button>
+        <button data-a="open">📂 Finder</button>
+        <button data-a="term">⌥ Terminal</button>
+        ${s.pr_url ? `<a href="${s.pr_url}" target="_blank">PR ↗</a>`:""}
+      </div>`;
+    el.onclick = e => {
+      const a = e.target.dataset.a;
+      if (a) {
+        if (a==="cp-path") copy(path, "путь");
+        if (a==="cp-id") copy(s.id, "session ID");
+        if (a==="cp-resume") copy(`cd ${path} && claude --resume ${s.id}`, "команда");
+        if (a==="open") post("/api/open", {path});
+        if (a==="term") post("/api/terminal", {path});
+        return;
+      }
+      SEL = (SEL===s.id) ? null : s.id;
+      render(); focusNode("sess:"+s.id);
+    };
+    list.appendChild(el);
+  }
+}
+
+function buildGraph() {
+  const els = [];
+  els.push({data:{id:"root", label:"~/.claude sessions", kind:"root"}});
+  // group nodes per distinct parent dir (workspace root)
+  const groups = {};
+  for (const d of MODEL.directories) {
+    if (!groups[d.root]) {
+      const gid = "grp:"+d.root;
+      groups[d.root] = gid;
+      els.push({data:{id:gid, label:d.root.split("/").slice(-1)[0]||d.root, kind:"group"}});
+      els.push({data:{source:"root", target:gid}});
+    }
+  }
+  // directory nodes keyed by path
+  const byPath = {};
+  for (const d of MODEL.directories) {
+    const id = "dir:"+d.path; byPath[d.path] = id;
+    els.push({data:{id, label:d.name.length>18?d.name.slice(0,17)+"…":d.name,
+      kind:"dir", dirty:d.dirty>0, dname:d.name}});
+    els.push({data:{source:groups[d.root], target:id}});
+  }
+  // sessions → their dir (by cwd path), else orphan bucket
+  let orphanAdded = false;
+  if (SHOW_SESS) for (const s of MODEL.sessions) {
+    let parent = s.cwd && byPath[s.cwd];
+    if (!parent) {
+      if (!orphanAdded) {
+        els.push({data:{id:"dir:__orphan", label:"orphan", kind:"dir", dirty:false}});
+        els.push({data:{source:"root", target:"dir:__orphan"}});
+        orphanAdded = true;
+      }
+      parent = "dir:__orphan";
+    }
+    const label = s.title || (s.branch||s.id).slice(0,24);
+    els.push({data:{id:"sess:"+s.id, label, kind:"sess", pr:!!s.pr_number, sid:s.id}});
+    els.push({data:{source:parent, target:"sess:"+s.id}});
+  }
+  cy = cytoscape({
+    container: $("#cy"), elements: els,
+    style: [
+      {selector:"node", style:{"label":"data(label)","font-size":"8px","color":"#e6edf3",
+        "text-valign":"center","text-halign":"right","text-margin-x":3,
+        "width":10,"height":10,"background-color":"#8b949e"}},
+      {selector:'node[kind="root"]', style:{"width":22,"height":22,
+        "background-color":"#bc8cff","font-size":"12px","font-weight":"bold"}},
+      {selector:'node[kind="group"]', style:{"width":17,"height":17,
+        "background-color":"#6e7681","font-size":"10px","font-weight":"bold"}},
+      {selector:'node[kind="dir"]', style:{"width":14,"height":14,"background-color":"#3fb950"}},
+      {selector:'node[kind="dir"][?dirty]', style:{"background-color":"#d29922"}},
+      {selector:'node[kind="sess"]', style:{"width":9,"height":9,"background-color":"#8b949e"}},
+      {selector:'node[kind="sess"][?pr]', style:{"background-color":"#388bfd"}},
+      {selector:"edge", style:{"width":1,"line-color":"#30363d","curve-style":"bezier",
+        "target-arrow-shape":"none"}},
+      {selector:".dim", style:{"opacity":0.12}},
+      {selector:".hit", style:{"border-width":3,"border-color":"#58a6ff"}},
+    ],
+    layout:{name:"breadthfirst", directed:true, spacingFactor:0.65, padding:30},
+    wheelSensitivity:0.25,
+  });
+  cy.on("tap", 'node[kind="sess"]', e => {
+    const sid = e.target.data("sid");
+    SEL = sid; render();
+    const r = $(`.row[data-id="${sid}"]`); if (r) r.scrollIntoView({block:"center"});
+  });
+  cy.on("tap", 'node[kind="dir"]', e => {
+    const name = e.target.data("dname") || "";
+    FILTER="all"; SEL=null;
+    document.querySelectorAll(".chip[data-f]").forEach(x=>x.classList.toggle("on", x.dataset.f==="all"));
+    $("#q").value = name; render(); applyGraphFilter();
+  });
+  applyGraphFilter();
+  themeGraph();
+}
+
+function applyGraphFilter() {
+  if (!cy) return;
+  const q = $("#q").value.trim().toLowerCase();
+  const matchIds = CONVO
+    ? new Set((CONVO_RESULTS||[]).map(s=>"sess:"+s.id))
+    : new Set(MODEL.sessions.filter(sessionMatches).map(s=>"sess:"+s.id));
+  cy.batch(() => {
+    cy.elements().removeClass("dim hit");
+    if (CONVO && CONVO_RESULTS === null) return;
+    if (!CONVO && !q && FILTER==="all") return;
+    cy.nodes('[kind="sess"]').forEach(n => {
+      if (!matchIds.has(n.id())) n.addClass("dim");
+      else n.addClass("hit");
+    });
+  });
+}
+function focusNode(id) {
+  if (!cy) return; const n = cy.getElementById(id);
+  if (n.nonempty()) { cy.animate({center:{eles:n}, zoom:1.4}, {duration:300}); }
+}
+
+function timeago(ts){ const s=Date.now()/1000-ts;
+  if(s<3600) return Math.round(s/60)+"m"; if(s<86400) return Math.round(s/3600)+"h";
+  return Math.round(s/86400)+"d"; }
+function esc(s){ return (s||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+async function runConvoSearch() {
+  const q = $("#q").value.trim();
+  if (!q) { CONVO_RESULTS = null; render(); applyGraphFilter(); return; }
+  $("#stat").textContent = "ищу в беседах…";
+  const r = await fetch("/api/search?q=" + encodeURIComponent(q));
+  const d = await r.json();
+  CONVO_RESULTS = d.results;
+  $("#stat").textContent = `${d.results.length} сессий содержат «${q}»`;
+  render(); applyGraphFilter();
+}
+
+$("#q").oninput = () => {
+  if (CONVO) {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(runConvoSearch, 250);
+  } else {
+    render(); applyGraphFilter();
+  }
+};
+$("#convoToggle").onclick = () => {
+  CONVO = !CONVO;
+  $("#convoToggle").classList.toggle("on", CONVO);
+  $("#q").placeholder = CONVO
+    ? "поиск по всему тексту бесед…"
+    : "поиск по имени сессии, ветке, промпту, ID…";
+  CONVO_RESULTS = null;
+  if (CONVO && $("#q").value.trim()) runConvoSearch(); else { render(); applyGraphFilter(); }
+};
+document.querySelectorAll(".chip[data-f]").forEach(c => c.onclick = () => {
+  document.querySelectorAll(".chip[data-f]").forEach(x=>x.classList.remove("on"));
+  c.classList.add("on"); FILTER = c.dataset.f; render(); applyGraphFilter();
+});
+$("#toggleSess").onclick = () => { SHOW_SESS=!SHOW_SESS;
+  $("#toggleSess").textContent = SHOW_SESS?"скрыть сессии":"показать сессии"; buildGraph(); };
+$("#relayout").onclick = () => cy && cy.layout({name:"cose", animate:true, padding:30}).run();
+$("#refresh").onclick = () => load(true);
+
+// ---- theme ----
+function themeGraph() {
+  if (!cy) return;
+  const light = document.body.classList.contains("light");
+  cy.nodes('[kind="sess"],[kind="dir"]').style("color", light ? "#1f2328" : "#e6edf3");
+  cy.edges().style("line-color", light ? "#d0d7de" : "#30363d");
+}
+function applyTheme(light) {
+  document.body.classList.toggle("light", light);
+  $("#themeBtn").textContent = light ? "☀️" : "🌙";
+  try { localStorage.setItem("cockpit-theme", light ? "light" : "dark"); } catch(e) {}
+  themeGraph();
+}
+$("#themeBtn").onclick = () => applyTheme(!document.body.classList.contains("light"));
+applyTheme((() => { try { return localStorage.getItem("cockpit-theme") === "light"; }
+  catch(e) { return false; } })());
+
+load(false);
+</script>
+</body>
+</html>

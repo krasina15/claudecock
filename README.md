@@ -58,6 +58,30 @@ python3 scan.py --stats     # быстрые счётчики
 python3 scan.py             # полный JSON в stdout
 ```
 
+### Поиск из CLI (без браузера)
+
+Если в браузер ходить неудобно — те же два режима поиска доступны прямо из
+терминала через `search.py`:
+
+```bash
+python3 search.py "deploy nginx"     # полнотекстовый по всем транскриптам
+python3 search.py -t "odoo"          # только по заголовкам/метаданным (мгновенно)
+```
+
+- **Полнотекст** читает беседу каждой сессии, ранжирует по числу совпадений и
+  показывает подсвеченные сниппеты — то же, что `💬 в беседе` в UI.
+- **`-t` / `--titles`** фильтрует метаданные (имя сессии, первый промпт, ветку,
+  workspace, id) без чтения транскриптов, поэтому мгновенно — то же, что фильтр
+  *по метаданным* в UI.
+
+Каждый результат печатает готовую команду `cd … && claude --resume <id>`. Флаги:
+`-n` лимит, `-s` число сниппетов, `--json` для скриптов, `--no-color`.
+
+В отличие от веб-кокпита, CLI не сканирует git-рабочие копии (ahead/behind,
+dirty, merged — десятки секунд `git`-вызовов), потому что поиску они не нужны.
+Поэтому запуск занимает доли секунды: ~0.7 с по заголовкам, ~1 с полнотекст на
+сотне сессий.
+
 ### Как устроено
 
 `scan.py` джойнит два локальных источника:
@@ -144,6 +168,30 @@ You can also dump the raw model without the server:
 python3 scan.py --stats     # quick counts
 python3 scan.py             # full JSON model to stdout
 ```
+
+### CLI search (no browser)
+
+If going to the browser is awkward, the same two search modes are available
+straight from the terminal via `search.py`:
+
+```bash
+python3 search.py "deploy nginx"     # full-text across every transcript
+python3 search.py -t "odoo"          # by title/metadata only (instant)
+```
+
+- **Full-text** reads each session's conversation, ranks by hit count, and shows
+  highlighted snippets — same as `💬 in-conversation` in the UI.
+- **`-t` / `--titles`** filters metadata (session title, first prompt, branch,
+  workspace, id) without reading transcripts, so it is instant — same as the
+  *metadata* filter in the UI.
+
+Each result prints a ready `cd … && claude --resume <id>` command. Flags: `-n`
+limit, `-s` snippet count, `--json` for scripts, `--no-color`.
+
+Unlike the web cockpit, the CLI does **not** scan git working copies (ahead/
+behind, dirty, merged — tens of seconds of `git` calls), since search doesn't
+need them. Startup is therefore sub-second: ~0.7s for titles, ~1s for full-text
+across a hundred sessions.
 
 ### How it works
 

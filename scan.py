@@ -181,6 +181,52 @@ def conversation_text(jsonl_path):
     return "\n".join(parts)
 
 
+def fulltext_match(text, q, snippets=3):
+    """Substring search of q in text → (hit_count, [snippet, ...]).
+
+    Case-insensitive. Snippets are ±70 chars around the first `snippets`
+    occurrences, newlines flattened. Returns (0, []) when q is absent.
+    Shared by the web server (/api/search) and the CLI (search.py).
+    """
+    q = (q or "").strip()
+    if not q:
+        return 0, []
+    ql, tl = q.lower(), text.lower()
+    if ql not in tl:
+        return 0, []
+    hits = tl.count(ql)
+    snips, start = [], 0
+    for _ in range(snippets):
+        i = tl.find(ql, start)
+        if i < 0:
+            break
+        a = max(0, i - 70)
+        b = min(len(text), i + len(q) + 70)
+        frag = text[a:b].replace("\n", " ").strip()
+        snips.append(frag)
+        start = i + len(q)
+    return hits, snips
+
+
+def search_titles(sessions, q):
+    """Metadata filter over sessions: title, first prompt, branch, workspace, id.
+
+    Case-insensitive substring; the CLI/UI "by title" mode. Instant — no
+    transcript reads. Preserves the model's (recency) order.
+    """
+    ql = (q or "").strip().lower()
+    if not ql:
+        return []
+    out = []
+    for s in sessions:
+        fields = (s.get("title"), s.get("first_prompt"), s.get("branch"),
+                  s.get("workspace"), s.get("id"))
+        hay = " ".join(f for f in fields if f).lower()
+        if ql in hay:
+            out.append(s)
+    return out
+
+
 def scan_sessions():
     """Every Claude Code session across all projects in ~/.claude/projects."""
     rows = []

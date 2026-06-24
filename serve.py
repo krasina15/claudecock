@@ -55,26 +55,14 @@ def search_conversations(q, limit=60, snippets=3):
     q = (q or "").strip()
     if not q:
         return []
-    ql = q.lower()
     model = get_model()
     by_id = {s["id"]: s for s in model["sessions"]}
     results = []
     for s in model["sessions"]:
         text = _session_text(s["jsonl"])
-        tl = text.lower()
-        if ql not in tl:
+        hits, snips = scan.fulltext_match(text, q, snippets)
+        if not hits:
             continue
-        hits = tl.count(ql)
-        snips, start = [], 0
-        for _ in range(snippets):
-            i = tl.find(ql, start)
-            if i < 0:
-                break
-            a = max(0, i - 70)
-            b = min(len(text), i + len(q) + 70)
-            frag = text[a:b].replace("\n", " ").strip()
-            snips.append(frag)
-            start = i + len(q)
         meta = by_id.get(s["id"], {})
         results.append({**meta, "hits": hits, "snippets": snips})
     results.sort(key=lambda r: r["hits"], reverse=True)

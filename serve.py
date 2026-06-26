@@ -18,6 +18,7 @@ Zero external dependencies — stdlib only.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -29,6 +30,67 @@ import scan  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
+
+IS_MACOS = sys.platform == "darwin"
+IS_WINDOWS = sys.platform.startswith("win")
+
+# Linux terminal emulators that support "open a shell in this dir", in order of
+# preference (KDE/konsole first — that's the common desktop here). Each maps a
+# target dir to an argv. Override with CLAUDECOCK_TERMINAL='myterm --cd {dir}'.
+_LINUX_TERMINALS = [
+    ("konsole", lambda p: ["konsole", "--workdir", p]),
+    ("gnome-terminal", lambda p: ["gnome-terminal", "--working-directory=" + p]),
+    ("kitty", lambda p: ["kitty", "--directory", p]),
+    ("alacritty", lambda p: ["alacritty", "--working-directory", p]),
+    ("wezterm", lambda p: ["wezterm", "start", "--cwd", p]),
+    ("foot", lambda p: ["foot", "--working-directory=" + p]),
+    ("xfce4-terminal", lambda p: ["xfce4-terminal", "--working-directory=" + p]),
+    ("tilix", lambda p: ["tilix", "--working-directory=" + p]),
+    ("x-terminal-emulator", lambda p: ["x-terminal-emulator"]),
+    ("xterm", lambda p: ["xterm", "-e", "sh", "-c", f"cd {p!r}; exec ${{SHELL:-sh}}"]),
+]
+
+
+def _opener_argv(target):
+    """argv to reveal a file/dir or open a URL in the OS default handler."""
+    if IS_MACOS:
+        return ["open", target]
+    if IS_WINDOWS:
+        return ["cmd", "/c", "start", "", target]
+    return ["xdg-open", target]
+
+
+def _open_external(target):
+    """Reveal a dir / open a URL via the OS default handler. Best-effort."""
+    try:
+        subprocess.Popen(_opener_argv(target))
+        return True
+    except Exception:
+        return False
+
+
+def _open_terminal(path):
+    """Open a terminal at `path`. Returns True if a launcher was found."""
+    if IS_MACOS:
+        subprocess.Popen([
+            "osascript", "-e",
+            f'tell application "Terminal" to do script "cd {path}"',
+            "-e", 'tell application "Terminal" to activate',
+        ])
+        return True
+    if IS_WINDOWS:
+        subprocess.Popen(["cmd", "/c", "start", "cmd", "/k", f"cd /d {path}"])
+        return True
+    override = os.environ.get("CLAUDECOCK_TERMINAL")
+    if override:
+        argv = [a.replace("{dir}", path) for a in override.split()]
+        subprocess.Popen(argv)
+        return True
+    for name, build in _LINUX_TERMINALS:
+        if shutil.which(name):
+            subprocess.Popen(build(path))
+            return True
+    return False
 
 _cache = {"model": None, "ts": 0}
 _lock = threading.Lock()
@@ -135,20 +197,17 @@ class Handler(BaseHTTPRequestHandler):
         path = data.get("path", "")
         if self.path == "/api/open":
             if _safe_dir(path):
-                subprocess.Popen(["open", path])
+                _open_external(path)
                 self._send(200, {"ok": True})
             else:
                 self._send(400, {"error": "invalid path"})
         elif self.path == "/api/terminal":
-            if _safe_dir(path):
-                subprocess.Popen([
-                    "osascript", "-e",
-                    f'tell application "Terminal" to do script "cd {path}"',
-                    "-e", 'tell application "Terminal" to activate',
-                ])
+            if not _safe_dir(path):
+                self._send(400, {"error": "invalid path"})
+            elif _open_terminal(path):
                 self._send(200, {"ok": True})
             else:
-                self._send(400, {"error": "invalid path"})
+                self._send(400, {"error": "no terminal emulator found"})
         else:
             self._send(404, {"error": "not found"})
 
@@ -174,7 +233,7 @@ def main():
     # warm the cache in the background so the first page load is instant-ish
     threading.Thread(target=get_model, daemon=True).start()
     if do_open:
-        subprocess.Popen(["open", url])
+        _open_external(url)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
